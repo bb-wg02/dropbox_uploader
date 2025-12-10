@@ -88,22 +88,30 @@ Environment Variables:
 
 def main():
     """Main entry point for CLI."""
-    args = parse_args()
+    try:
+        args = parse_args()
+    except SystemExit as e:
+        # argparse calls sys.exit on --help or error
+        raise
 
     # Configure logging level
     if args.quiet:
         logger.setLevel("ERROR")
     elif args.verbose:
         logger.setLevel("DEBUG")
+        logger.debug(f"Arguments: file={args.file}, folder={args.folder}")
 
     # Validate file exists before attempting upload
     file_path = Path(args.file)
+    if args.verbose:
+        logger.debug(f"Resolved path: {file_path.resolve()}")
+    
     if not file_path.exists():
-        logger.error(f"File not found: {args.file}")
+        print(f"✗ File not found: {args.file}")
         sys.exit(1)
 
     if not file_path.is_file():
-        logger.error(f"Path is not a file: {args.file}")
+        print(f"✗ Path is not a file: {args.file}")
         sys.exit(1)
 
     try:
@@ -115,9 +123,6 @@ def main():
                 overwrite=not args.no_overwrite,
             )
 
-        if not args.quiet:
-            print(f"Successfully uploaded to: {dropbox_path}")
-
         # Set GitHub Actions output if running in that environment
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a") as f:
@@ -126,28 +131,28 @@ def main():
         sys.exit(0)
 
     except AuthenticationError as e:
-        logger.error(f"Authentication failed: {e}")
-        logger.error("Make sure DROPBOX_ACCESS_TOKEN is set correctly.")
+        print(f"✗ Authentication failed: {e}")
+        print("  Make sure DROPBOX_ACCESS_TOKEN is set correctly.")
         sys.exit(2)
 
     except UploaderFileNotFoundError as e:
-        logger.error(str(e))
+        print(f"✗ {e}")
         sys.exit(1)
 
     except UploadError as e:
-        logger.error(f"Upload failed: {e}")
+        print(f"✗ Upload failed: {e}")
         sys.exit(3)
 
     except DropboxUploaderError as e:
-        logger.error(f"Error: {e}")
+        print(f"✗ Error: {e}")
         sys.exit(4)
 
     except KeyboardInterrupt:
-        logger.info("Upload cancelled by user")
+        print("\n✗ Upload cancelled")
         sys.exit(130)
 
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        print(f"✗ Unexpected error: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()

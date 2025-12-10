@@ -20,13 +20,16 @@ except ImportError:
     print("Error: dropbox package not installed. Run: pip install dropbox")
     sys.exit(1)
 
-# Configure logging
+# Configure logging with immediate output
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format="%(message)s",
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+# Ensure output is not buffered
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
 
 # Constants
 CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB chunks for large file uploads
@@ -92,7 +95,7 @@ class DropboxUploader:
         """Verify the Dropbox connection and token validity."""
         try:
             account = self._client.users_get_current_account()
-            logger.info(f"Connected to Dropbox as: {account.name.display_name}")
+            print(f"✓ Connected as: {account.name.display_name}")
         except AuthError as e:
             raise AuthenticationError(f"Invalid Dropbox access token: {e}")
         except Exception as e:
@@ -195,7 +198,8 @@ class DropboxUploader:
                         cursor
                     )
                     cursor.offset = f.tell()
-                    logger.debug(f"Uploaded {f.tell() / (1024*1024):.1f} MB of {file_size / (1024*1024):.1f} MB")
+                    pct = (f.tell() / file_size) * 100
+                    print(f"  {pct:.0f}% uploaded...", end='\r')
 
         raise UploadError("Unexpected end of file during chunked upload")
 
@@ -267,7 +271,10 @@ class DropboxUploader:
         dropbox_path = self._normalize_dropbox_path(f"{dropbox_folder}/{dest_filename}")
 
         file_size = file_path.stat().st_size
-        logger.info(f"Uploading: {file_path.name} ({file_size / 1024:.1f} KB) -> {dropbox_path}")
+        size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024*1024):.1f} MB"
+        
+        print(f"→ Uploading: {file_path.name} ({size_str})")
+        print(f"→ Destination: {dropbox_path}")
 
         # Retry loop
         last_error = None
@@ -279,7 +286,7 @@ class DropboxUploader:
                 else:
                     metadata = self._upload_large_file(file_path, dropbox_path, file_size, overwrite)
 
-                logger.info(f"Upload successful: {metadata.path_display}")
+                print(f"✓ Upload complete: {metadata.path_display}")
                 return metadata.path_display
 
             except AuthError as e:
@@ -292,7 +299,7 @@ class DropboxUploader:
                 # Check for specific error types
                 if "path/conflict" in error_msg.lower():
                     if overwrite:
-                        logger.warning(f"Conflict detected, retrying with overwrite...")
+                        print(f"⚠ Conflict detected, retrying...")
                     else:
                         raise UploadError(f"File already exists at {dropbox_path}")
 
@@ -300,7 +307,7 @@ class DropboxUploader:
                     raise UploadError("Insufficient space in Dropbox account")
 
                 elif attempt < MAX_RETRIES:
-                    logger.warning(f"Attempt {attempt} failed: {error_msg}. Retrying in {RETRY_DELAY}s...")
+                    print(f"⚠ Attempt {attempt}/{MAX_RETRIES} failed. Retrying in {RETRY_DELAY}s...")
                     time.sleep(RETRY_DELAY)
                 else:
                     raise UploadError(f"Upload failed after {MAX_RETRIES} attempts: {error_msg}")
@@ -308,7 +315,7 @@ class DropboxUploader:
             except (ConnectionError, TimeoutError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    logger.warning(f"Connection error on attempt {attempt}: {e}. Retrying in {RETRY_DELAY}s...")
+                    print(f"⚠ Connection error (attempt {attempt}/{MAX_RETRIES}). Retrying in {RETRY_DELAY}s...")
                     time.sleep(RETRY_DELAY)
                 else:
                     raise UploadError(f"Connection failed after {MAX_RETRIES} attempts: {e}")
@@ -316,7 +323,7 @@ class DropboxUploader:
             except Exception as e:
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    logger.warning(f"Unexpected error on attempt {attempt}: {e}. Retrying in {RETRY_DELAY}s...")
+                    print(f"⚠ Error (attempt {attempt}/{MAX_RETRIES}): {e}. Retrying...")
                     time.sleep(RETRY_DELAY)
                 else:
                     raise UploadError(f"Upload failed: {e}")
