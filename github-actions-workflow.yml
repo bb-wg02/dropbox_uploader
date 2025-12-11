@@ -20,6 +20,7 @@ env:
 
 jobs:
   generate-and-upload:
+    if: false  # Temporarily disable this job  
     runs-on: ubuntu-latest
 
     steps:
