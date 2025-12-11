@@ -66,30 +66,55 @@ class DropboxUploader:
         """
         Initialize the Dropbox uploader.
 
-        Args:
-            access_token: Dropbox API access token. If not provided, reads from
-                         DROPBOX_ACCESS_TOKEN environment variable.
+        Preferred auth (auto-refresh):
+          - DROPBOX_APP_KEY
+          - DROPBOX_APP_SECRET
+          - DROPBOX_REFRESH_TOKEN
 
-        Raises:
-            AuthenticationError: If no token is provided or found.
+        Legacy fallback:
+          - explicit access_token argument, or
+          - DROPBOX_ACCESS_TOKEN environment variable
         """
-        self.access_token = access_token or os.environ.get("DROPBOX_ACCESS_TOKEN")
+        # Explicit access token (e.g. from CLI --token)
+        self._explicit_access_token = access_token
 
-        if not self.access_token:
-            raise AuthenticationError(
-                "No Dropbox access token provided. "
-                "Set DROPBOX_ACCESS_TOKEN environment variable or pass token directly."
-            )
+        # Legacy env-based access token
+        self._env_access_token = os.environ.get("DROPBOX_ACCESS_TOKEN")
+
+        # Preferred refresh-token-based auth
+        self._app_key = os.environ.get("DROPBOX_APP_KEY")
+        self._app_secret = os.environ.get("DROPBOX_APP_SECRET")
+        self._refresh_token = os.environ.get("DROPBOX_REFRESH_TOKEN")
 
         self._client: Optional[dropbox.Dropbox] = None
+
 
     @property
     def client(self) -> dropbox.Dropbox:
         """Lazy initialization of Dropbox client."""
         if self._client is None:
-            self._client = dropbox.Dropbox(self.access_token)
+            # Preferred: refresh-token-based auth if all pieces are present
+            if self._refresh_token and self._app_key and self._app_secret:
+                self._client = dropbox.Dropbox(
+                    oauth2_refresh_token=self._refresh_token,
+                    app_key=self._app_key,
+                    app_secret=self._app_secret,
+                )
+            else:
+                # Legacy: fall back to access token
+                access_token = self._explicit_access_token or self._env_access_token
+                if not access_token:
+                    raise AuthenticationError(
+                        "No Dropbox credentials provided.\n"
+                        "Preferred: set DROPBOX_APP_KEY, DROPBOX_APP_SECRET, and DROPBOX_REFRESH_TOKEN.\n"
+                        "Fallback: set DROPBOX_ACCESS_TOKEN or pass --token."
+                    )
+                self._client = dropbox.Dropbox(access_token)
+
             self._verify_connection()
+
         return self._client
+
 
     def _verify_connection(self) -> None:
         """Verify the Dropbox connection and token validity."""
@@ -97,7 +122,7 @@ class DropboxUploader:
             account = self._client.users_get_current_account()
             print(f"✓ Connected as: {account.name.display_name}")
         except AuthError as e:
-            raise AuthenticationError(f"Invalid Dropbox access token: {e}")
+            raise AuthenticationError(f"Invalid Dropbox credentials: {e}")
         except Exception as e:
             raise DropboxUploaderError(f"Failed to connect to Dropbox: {e}")
 

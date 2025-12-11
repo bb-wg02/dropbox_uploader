@@ -9,6 +9,8 @@ import sys
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv  # NEW: load .env file into environment
+
 from dropbox_uploader import (
     DropboxUploader,
     DropboxUploaderError,
@@ -17,6 +19,12 @@ from dropbox_uploader import (
     UploadError,
     logger,
 )
+
+# Load environment variables from .env if present.
+# override=False means: if a variable is already set in the real environment
+# (e.g., GitHub Actions secrets), we DO NOT overwrite it with .env.
+load_dotenv(override=False)
+
 
 
 def parse_args():
