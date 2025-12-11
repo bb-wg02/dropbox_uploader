@@ -1,14 +1,28 @@
 # .github/workflows/upload-report.yml
 #
-# Example GitHub Actions workflow for generating and uploading reports to Dropbox.
-# 
-# Setup:
-# 1. Add your DROPBOX_ACCESS_TOKEN to repository secrets
-#    (Settings → Secrets and variables → Actions → New repository secret)
+# GitHub Actions workflow for generating and uploading reports to Dropbox
+# using the dropbox_uploader package with refresh-token based auth and uv.
 #
-# 2. Copy this file to .github/workflows/upload-report.yml in your repository
+# Setup (one time):
+# 1. In this repository, go to:
+#       Settings → Secrets and variables → Actions
+#    Add these repository secrets:
+#       - DROPBOX_APP_KEY        (from Dropbox app Settings)
+#       - DROPBOX_APP_SECRET     (from Dropbox app Settings)
+#       - DROPBOX_REFRESH_TOKEN  (from /oauth2/token JSON "refresh_token")
 #
-# 3. Adjust the schedule and script paths as needed
+# 2. Ensure pyproject.toml includes dropbox_uploader and dependencies:
+#       [project]
+#       dependencies = [
+#           "dropbox>=11.0.0",
+#           "python-dotenv>=1.0.0",
+#       ]
+#
+# 3. Ensure dropbox_uploader:
+#       - loads .env with load_dotenv(override=False) in __main__.py
+#       - DropboxUploader reads DROPBOX_APP_KEY, DROPBOX_APP_SECRET,
+#         DROPBOX_REFRESH_TOKEN from the environment (preferred),
+#         with DROPBOX_ACCESS_TOKEN / --token as legacy fallback.
 
 name: Generate and Upload Report
 
@@ -16,7 +30,7 @@ on:
   # Run on a schedule (adjust as needed)
   schedule:
     - cron: '0 8 * * *'  # Daily at 8:00 AM UTC
-  
+
   # Allow manual triggering
   workflow_dispatch:
     inputs:
@@ -32,51 +46,55 @@ env:
 jobs:
   generate-and-upload:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-      
-      - name: Install dependencies
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Create uv environment and install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install dropbox
-          # If you have a requirements.txt:
-          # pip install -r requirements.txt
-      
+          # uv uses pyproject.toml in the repo root
+          uv sync
+
       - name: Generate report
         id: generate
         run: |
-          # Run your report generation script
-          # This should create a markdown file with timestamp in the name
-          python your_report_script.py
-          
-          # Find the generated file (adjust pattern as needed)
-          REPORT_FILE=$(ls -t report_*.md 2>/dev/null | head -n1)
-          
+          # Run your report generation script (you provide this)
+          # It should create a markdown file like: report_YYYY-MM-DD_HH-MM.md
+          uv run python your_report_script.py
+
+          # Find the most recent report_*.md file
+          REPORT_FILE=$(ls -t report_*.md 2>/dev/null | head -n 1)
+
           if [ -z "$REPORT_FILE" ]; then
             echo "Error: No report file generated"
             exit 1
           fi
-          
-          echo "report_file=$REPORT_FILE" >> $GITHUB_OUTPUT
+
+          echo "report_file=$REPORT_FILE" >> "$GITHUB_OUTPUT"
           echo "Generated report: $REPORT_FILE"
-      
+
       - name: Upload to Dropbox
         id: upload
         env:
-          DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_FOLDER: ${{ env.DROPBOX_FOLDER }}
         run: |
-          python -m dropbox_uploader "${{ steps.generate.outputs.report_file }}" \
-            --folder "${{ env.DROPBOX_FOLDER }}" \
+          uv run python -m dropbox_uploader \
+            "${{ steps.generate.outputs.report_file }}" \
+            --folder "$DROPBOX_FOLDER" \
             --verbose
-      
+
       - name: Report status
         if: always()
         run: |
@@ -87,45 +105,48 @@ jobs:
           fi
 
 
-  # Alternative job using the Python API directly
+  # Optional alternative job using the Python API directly
   generate-and-upload-python:
     runs-on: ubuntu-latest
-    if: false  # Disabled by default - enable by changing to 'true'
-    
+    if: false  # Disabled by default - flip to 'true' if you want to use this
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install dependencies
-        run: |
-          pip install dropbox
-      
-      - name: Generate and upload
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Create uv environment
+        run: uv sync
+
+      - name: Generate and upload (Python API)
         env:
-          DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
           DROPBOX_FOLDER: ${{ env.DROPBOX_FOLDER }}
         run: |
-          python << 'EOF'
+          uv run python << 'EOF'
           import os
           from datetime import datetime
           from dropbox_uploader import upload_file
-          
+
           # Generate report
           timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
           filename = f"report_{timestamp}.md"
-          
-          # Your report generation logic here
           content = f"# Report {timestamp}\n\nGenerated by GitHub Actions"
           with open(filename, "w") as f:
               f.write(content)
-          
-          # Upload
-          folder = os.environ.get("DROPBOX_FOLDER", "/Reports")
+
+          # Upload using refresh-token auth via env vars
+          folder = os.environ.get("DROPBOX_FOLDER", "/Reports/Automated")
+          print("Uploading via Python API to folder:", folder)
           path = upload_file(filename, dropbox_folder=folder)
-          print(f"Uploaded to: {path}")
+          print("Uploaded to:", path)
           EOF
